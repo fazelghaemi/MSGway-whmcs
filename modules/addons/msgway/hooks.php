@@ -35,20 +35,16 @@ function msgway_canSendNow(int $limitPerMinute): bool
 /** Helper: resolve mobile از $vars → tblclients */
 function msgway_resolveClientMobile(array $vars): ?array
 {
-    // تلاش برای پیدا کردن userid
     $uid = $vars['userid'] ?? $vars['userId'] ?? $vars['clientid'] ?? $vars['clientId'] ?? null;
     if (!$uid && isset($vars['user']) && is_array($vars['user'])) {
         $uid = $vars['user']['id'] ?? null;
     }
-
     if ($uid) {
         $client = Capsule::table('tblclients')->where('id', $uid)->first();
         if ($client && !empty($client->phonenumber)) {
             return ['mobile' => $client->phonenumber, 'client' => $client];
         }
     }
-
-    // تلاش بر اساس ایمیل
     $email = $vars['email'] ?? $vars['clientEmail'] ?? null;
     if ($email) {
         $client = Capsule::table('tblclients')->where('email', $email)->first();
@@ -56,54 +52,117 @@ function msgway_resolveClientMobile(array $vars): ?array
             return ['mobile' => $client->phonenumber, 'client' => $client];
         }
     }
-
     return null;
 }
 
-/** Helper: برساخت params (اختیاری) با نگاه به getTemplate */
-function msgway_buildParamsForTemplate(MsgwayClient $client, int $templateId, array $vars, $clientRow): array
+/** خواندن مپ پارامترها برای (hook, templateId) */
+function msgway_getParamMap(string $hook, int $templateId): array
+{
+    $rows = Capsule::table('mod_msgway_param_maps')
+        ->where('hook', $hook)->where('template_id', $templateId)->orderBy('id','asc')->get();
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'param_key'   => (string)$r->param_key,
+            'source'      => (string)$r->source,
+            'source_key'  => (string)($r->source_key ?? ''),
+            'static_value'=> (string)($r->static_value ?? ''),
+        ];
+    }
+    return $out;
+}
+
+/** ساخت params بر اساس مپ (با رعایت ترتیب API) */
+function msgway_buildParamsMapped(MsgwayClient $client, string $hook, int $templateId, array $vars, $clientRow): array
+{
+    // ترتیب پارامترها از API
+    try {
+        $tpl = $client->getTemplate($templateId);
+        $order = $tpl['params'] ?? [];
+    } catch (\Throwable $e) {
+        $order = []; // اگر نشد، از ترتیب ذخیره‌ی مپ استفاده می‌کنیم
+    }
+
+    $map = msgway_getParamMap($hook, $templateId);
+    if (empty($map)) {
+        return []; // مپ تعریف نشده → بگذار fallback هوشمند کار کند
+    }
+
+    // اگر order داریم، map را بر اساس order مرتب کنیم
+    if (!empty($order)) {
+        $mapByKey = [];
+        foreach ($map as $m) $mapByKey[$m['param_key']] = $m;
+        $sorted = [];
+        foreach ($order as $k) {
+            if (isset($mapByKey[$k])) $sorted[] = $mapByKey[$k];
+        }
+        $map = $sorted;
+    }
+
+    $result = [];
+    foreach ($map as $m) {
+        $val = '';
+        switch ($m['source']) {
+            case 'vars':
+                $val = (string)($vars[$m['source_key']] ?? '');
+                break;
+            case 'client':
+                $key = $m['source_key'];
+                $val = ($clientRow && isset($clientRow->$key)) ? (string)$clientRow->$key : '';
+                if ($key === 'name' && $clientRow) {
+                    $val = trim(($clientRow->firstname ?? '').' '.($clientRow->lastname ?? ''));
+                }
+                break;
+            case 'literal':
+                $val = (string)$m['static_value'];
+                break;
+        }
+        $result[] = $val;
+    }
+    return $result;
+}
+
+/** fallback: اگر مپ نداریم، به‌صورت هوشمند از getTemplate و $vars/$client پر کند */
+function msgway_buildParamsFallback(MsgwayClient $client, int $templateId, array $vars, $clientRow): array
 {
     try {
-        $tpl = $client->getTemplate($templateId); // ['template' => '...', 'params' => ['name','invoiceid',...]]
+        $tpl = $client->getTemplate($templateId);
         $keys = $tpl['params'] ?? [];
         $out  = [];
         foreach ($keys as $k) {
             $k = (string)$k;
             $val = null;
-            // اولویت: از $vars → سپس از client → سپس تلاش‌های خاص
             if (isset($vars[$k])) {
                 $val = $vars[$k];
             } elseif ($clientRow && isset($clientRow->$k)) {
                 $val = $clientRow->$k;
             } else {
-                // چند نگاشت رایج
                 switch ($k) {
                     case 'name':
-                        $val = trim(($clientRow->firstname ?? '').' '.($clientRow->lastname ?? ''));
+                        $val = $clientRow ? trim(($clientRow->firstname ?? '').' '.($clientRow->lastname ?? '')) : '';
                         break;
                     case 'invoiceid':
-                        $val = $vars['invoiceid'] ?? $vars['invoiceId'] ?? null;
+                        $val = $vars['invoiceid'] ?? $vars['invoiceId'] ?? '';
                         break;
                     case 'amount':
-                        $val = $vars['amount'] ?? $vars['total'] ?? null;
+                        $val = $vars['amount'] ?? $vars['total'] ?? '';
                         break;
                     case 'ticketid':
-                        $val = $vars['ticketid'] ?? $vars['ticketId'] ?? null;
+                        $val = $vars['ticketid'] ?? $vars['ticketId'] ?? '';
                         break;
                     default:
-                        $val = $vars[$k] ?? null;
+                        $val = $vars[$k] ?? '';
                 }
             }
-            $out[$k] = (string)($val ?? '');
+            $out[] = (string)($val ?? '');
         }
         return $out;
     } catch (\Throwable $e) {
-        // اگر نتوانستیم params بخوانیم، بدون params ادامه می‌دهیم
         return [];
     }
 }
 
-/** ارسال و لاگ با رعایت ریت‌لیمیت/صف */
+/** Helper: ارسال با رعایت ریت‌لیمیت/صف */
 function msgway_send_and_log_dynamic(string $hook, string $rawMobile, int $templateId, array $payload = [], array $params = []): void
 {
     $apiKey      = msgway_getSetting('api_key');
@@ -118,12 +177,11 @@ function msgway_send_and_log_dynamic(string $hook, string $rawMobile, int $templ
         $client = new MsgwayClient($apiKey, $countryCode);
 
         if (!msgway_canSendNow($rateLimit) && $enableQueue) {
-            // ورود به صف
             Capsule::table('mod_msgway_queue')->insert([
                 'hook'           => $hook,
                 'mobile'         => $mobile,
                 'template_id'    => (string)$templateId,
-                'params_json'    => json_encode(array_values($params), JSON_UNESCAPED_UNICODE),
+                'params_json'    => json_encode($params, JSON_UNESCAPED_UNICODE),
                 'payload'        => json_encode($payload, JSON_UNESCAPED_UNICODE),
                 'attempts'       => 0,
                 'next_attempt_at'=> date('Y-m-d H:i:s'),
@@ -170,7 +228,7 @@ function msgway_send_and_log_dynamic(string $hook, string $rawMobile, int $templ
     }
 }
 
-/** رجیستر داینامیک: برای هر هوک فعال از دیتابیس، یک add_hook بساز */
+/** رجیستر داینامیک همه‌ی هوک‌های فعال مطابق دیتابیس */
 try {
     $rows = Capsule::table('mod_msgway_templates')->where('enabled', 1)->get();
     foreach ($rows as $row) {
@@ -180,7 +238,6 @@ try {
             add_hook($hookName, 1, function($vars) use ($hookName, $templateId) {
                 $resolved = msgway_resolveClientMobile($vars);
                 if (!$resolved) {
-                    // اگر موبایل پیدا نشد، لاگِ skipped
                     Capsule::table('mod_msgway_logs')->insert([
                         'hook'        => $hookName,
                         'mobile'      => '',
@@ -196,7 +253,14 @@ try {
                 $apiKey      = msgway_getSetting('api_key');
                 $countryCode = msgway_getSetting('country_code') ?: '+98';
                 $client      = new MsgwayClient($apiKey, $countryCode);
-                $params      = msgway_buildParamsForTemplate($client, $templateId, $vars, $resolved['client'] ?? null);
+
+                // 1) تلاش اول: مپ ذخیره‌شده
+                $params = msgway_buildParamsMapped($client, $hookName, $templateId, $vars, $resolved['client'] ?? null);
+
+                // 2) اگر مپ نبود: fallback هوشمند
+                if (empty($params)) {
+                    $params = msgway_buildParamsFallback($client, $templateId, $vars, $resolved['client'] ?? null);
+                }
 
                 msgway_send_and_log_dynamic(
                     $hookName,
@@ -209,10 +273,10 @@ try {
         }
     }
 } catch (\Throwable $e) {
-    // اگر جدول هنوز ساخته نشده باشد (قبل از Activate)، سکوت می‌کنیم.
+    // اگر جداول هنوز ساخته نشده باشند، سکوت می‌کنیم.
 }
 
-/** پردازش صف با کران: AfterCronJob */
+/** پردازش صف با کران: AfterCronJob (بدون تغییر نسبت به گام ۲) */
 add_hook('AfterCronJob', 1, function() {
     $apiKey      = msgway_getSetting('api_key');
     $countryCode = msgway_getSetting('country_code') ?: '+98';
@@ -223,7 +287,6 @@ add_hook('AfterCronJob', 1, function() {
     try {
         $client = new MsgwayClient($apiKey, $countryCode);
 
-        // محدود: حداکثر 200 آیتم در هر ران برای جلوگیری از فشار
         $now = date('Y-m-d H:i:s');
         $batch = Capsule::table('mod_msgway_queue')
             ->where(function($q) use ($now) {

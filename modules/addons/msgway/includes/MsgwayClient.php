@@ -45,23 +45,15 @@ class MsgwayClient
         return new MessageWayAPI($this->apiKey);
     }
 
-    /** ارسال مبتنی بر Template از طریق SMS (با تشخیص خودکار پشتیبانی params) */
     public function sendTemplateSMS(string $mobile, int $templateId, array $params = []): array
     {
         $mw = $this->getClient();
-
-        // اگر نسخه SDK پارامتر سوم را بپذیرد، از آن استفاده می‌کنیم.
         try {
             $rm = new ReflectionMethod($mw, 'sendViaSMS');
             if ($rm->getNumberOfParameters() >= 3) {
-                // قرارداد رایج: ['params' => ['v1', 'v2', ...]]
                 return $mw->sendViaSMS($mobile, $templateId, ['params' => array_values($params)]);
             }
-        } catch (\Throwable $e) {
-            // اگر Reflection شکست خورد، می‌رویم سراغ امضای قدیمی.
-        }
-
-        // امضای استاندارد بدون پارامتر (طبق README رسمی PHP SDK)
+        } catch (\Throwable $e) {}
         return $mw->sendViaSMS($mobile, $templateId);
     }
 
