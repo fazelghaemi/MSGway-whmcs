@@ -1,0 +1,17 @@
+{
+  "name": "readystudio/msgway-whmcs-addon",
+  "description": "WHMCS Addon for MSGWAY (راه‌پیام) — coded by Fazel Ghaemi",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": ">=7.4",
+    "ext-curl": "*",
+    "ext-json": "*",
+    "messageway/messagewayphp": "^2.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "Msgway\\": "includes/"
+    }
+  }
+}
