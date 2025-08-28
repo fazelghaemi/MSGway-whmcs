@@ -1,16 +1,15 @@
-<div style="padding:20px;background:#ffd;">DEBUG: tpl loaded</div>
-
-{* MSGWAY OTP Auth — Safe template (no PHP functions), v1.0.4 *}
+{* MSGWAY OTP Auth — final template (safe) *}
 <style>
   .mw-card{max-width:640px;margin:2rem auto;padding:1.25rem;border:1px solid #eee;border-radius:14px;background:#fff}
   .mw-row{display:flex;gap:.75rem}
   .mw-row > div{flex:1}
   .rtl{direction:rtl;text-align:right}
+  .mw-note{padding:.5rem;border-radius:8px;background:#f8f9fa;margin-bottom:.5rem}
 </style>
 
 <div class="mw-card rtl">
-  <h3>ورود / عضویت با پیامک (راه‌پیام)</h3>
-  <p><small>{$brand|escape}</small></p>
+  <h3>ورود / ثبت‌نام با پیامک (راه‌پیام)</h3>
+  <p class="mw-note"><small>{$brand|escape}</small></p>
 
   {if $errors}
     <div style="background:#ffecec;border:1px solid #f5c2c7;color:#842029;padding:.75rem;border-radius:10px;margin:.5rem 0">
@@ -27,20 +26,22 @@
   {if $stage eq 'form'}
     <form method="post" action="{$modulelink|escape}">
       <input type="hidden" name="action" value="send_otp">
-      <div class="mw-row">
-        <label style="flex:0 0 160px">حالت:
+      <fieldset class="mw-row">
+        <label style="flex:0 0 160px">
+          حالت:
           <select name="mode">
             <option value="login" {if $prefill.mode ne 'register'}selected{/if}>ورود</option>
             <option value="register" {if $prefill.mode eq 'register'}selected{/if}>ثبت‌نام</option>
           </select>
         </label>
-        <label>موبایل:
+        <label>
+          موبایل:
           <input type="text" name="mobile" value="{$prefill.mobile|escape}" placeholder="مثلاً 0912xxxxxxx" required>
         </label>
-      </div>
+      </fieldset>
 
       <details style="margin-top:.75rem">
-        <summary>اطلاعات تکمیلی (برای ثبت‌نام جدید)</summary>
+        <summary>اطلاعات تکمیلی (برای ثبت‌نام)</summary>
         <div class="mw-row" style="margin-top:.5rem">
           <div>
             <label>نام:
@@ -54,11 +55,11 @@
           </div>
         </div>
         <label>ایمیل:
-          <input type="email" name="email" value="{$prefill.email|escape}" placeholder="[email protected]">
+          <input type="email" name="email" value="{$prefill.email|escape}" placeholder="[email protected]">
         </label>
       </details>
 
-      <button type="submit" class="btn btn-primary" style="margin-top:1rem">ارسال کد تایید</button>
+      <button type="submit" style="margin-top:1rem">ارسال کد تایید</button>
     </form>
   {else}
     <form method="post" action="{$modulelink|escape}">
@@ -66,17 +67,18 @@
       <label>کد تایید:
         <input type="text" name="otp" value="" placeholder="کد ۶ رقمی" required>
       </label>
-      <button type="submit" class="btn btn-success" style="margin-top:.75rem">تایید و ورود</button>
+      <button type="submit" style="margin-top:.75rem">تایید و ورود</button>
     </form>
+
     <hr>
     <form method="post" action="{$modulelink|escape}">
       <input type="hidden" name="action" value="send_otp">
       <input type="hidden" name="mode" value="{if $prefill.mode}{$prefill.mode|escape}{else}login{/if}">
       <input type="hidden" name="mobile" value="{$prefill.mobile|escape}">
+      <input type="hidden" name="email" value="{$prefill.email|escape}">
       <input type="hidden" name="firstname" value="{$prefill.firstname|escape}">
       <input type="hidden" name="lastname" value="{$prefill.lastname|escape}">
-      <input type="hidden" name="email" value="{$prefill.email|escape}">
-      <button type="submit" class="btn btn-secondary">ارسال مجدد کد</button>
+      <button type="submit" class="secondary">ارسال مجدد کد</button>
     </form>
   {/if}
 </div>

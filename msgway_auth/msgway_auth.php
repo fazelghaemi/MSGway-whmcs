@@ -1,104 +1,111 @@
 <?php
 /**
- * MSGWAY (راه‌پیام) — OTP Login & Register for WHMCS
- * کدنویسی: فاضل قائمی | Fazel Ghaemi
- * نسخه: 1.0.1
+ * MSGWAY OTP Auth — WHMCS Addon (standalone, no composer)
+ * Finalized package for OTP login/registration via HTTP to MessageWay
+ * Coder: Fazel Ghaemi
  */
 
-if (!defined('WHMCS')) { die('This file cannot be accessed directly'); }
+if (!defined('WHMCS')) {
+    die('This file cannot be accessed directly');
+}
 
 use WHMCS\Database\Capsule;
 
 /**
- * Lazy-load Composer autoload if present. Avoid fatal if vendor/ is missing.
+ * Load local helper classes
  */
-function msgway_auth_load_sdk(): bool
-{
-    static $loaded = null;
-    if ($loaded !== null) return $loaded;
-    $autoload = __DIR__ . '/vendor/autoload.php';
-    if (file_exists($autoload)) {
-        require_once $autoload;
-        $loaded = true;
-    } else {
-        $loaded = false;
-    }
-    return $loaded;
-}
+require_once __DIR__ . '/includes/MsgwayHttpClient.php';
 
-/** =====================[ config ]===================== */
+/**
+ * Module config
+ */
 function msgway_auth_config()
 {
     return [
-        'name'        => 'MSGWAY OTP Auth (راه‌پیام) — by Fazel Ghaemi',
-        'description' => 'ورود/عضویت کاربران WHMCS با OTP راه‌پیام و SSO امن',
-        'author'      => 'Fazel Ghaemi',
-        'version'     => '1.0.1',
-        'fields'      => [
+        'name' => 'MSGWAY OTP Auth (راه‌پیام) — Coded by: Fazel Ghaemi',
+        'description' => 'Login/Register via SMS OTP using MessageWay API (configurable endpoints).',
+        'author' => 'Fazel Ghaemi',
+        'version' => '2.0.0',
+        'fields' => [
             'api_key' => [
-                'FriendlyName' => 'MSGWAY API Key',
+                'FriendlyName' => 'MessageWay API Key',
                 'Type' => 'text',
                 'Size' => '80',
-                'Description' => 'کلید API از داشبورد MSGWAY',
+                'Description' => 'API key provided by MessageWay (or leave blank if you use other auth headers).',
+            ],
+            'api_key_header' => [
+                'FriendlyName' => 'API Key Header Name',
+                'Type' => 'text',
+                'Size' => '40',
+                'Default' => 'x-api-key',
+                'Description' => 'Header name to send the API key (e.g. Authorization, x-api-key, apiKey). If using \"Authorization: Bearer <key>\" set this to Authorization and enable bearer_auth below.',
+            ],
+            'bearer_auth' => [
+                'FriendlyName' => 'Bearer auth?',
+                'Type' => 'yesno',
+                'Description' => 'If enabled, API key will be sent as \"Authorization: Bearer {key}\".',
+            ],
+            'send_endpoint' => [
+                'FriendlyName' => 'Send OTP Endpoint',
+                'Type' => 'text',
+                'Size' => '80',
+                'Default' => 'https://api.msgway.com/v1/sms/send',
+                'Description' => 'Full URL to the send-otp endpoint (configurable).',
+            ],
+            'verify_endpoint' => [
+                'FriendlyName' => 'Verify OTP Endpoint',
+                'Type' => 'text',
+                'Size' => '80',
+                'Default' => 'https://api.msgway.com/v1/sms/verify',
+                'Description' => 'Full URL to the verify-otp endpoint (configurable).',
             ],
             'country_code' => [
-                'FriendlyName' => 'Country Code',
+                'FriendlyName' => 'Default Country Code',
                 'Type' => 'text',
                 'Size' => '8',
                 'Default' => '+98',
-                'Description' => 'برای نرمال‌سازی شماره‌ها (E.164)',
+                'Description' => 'Used to normalize entered mobile numbers to E.164.',
             ],
             'otp_template_id' => [
                 'FriendlyName' => 'OTP Template ID',
                 'Type' => 'text',
-                'Size' => '10',
-                'Default' => '1',
-                'Description' => 'Template ID مخصوص OTP در MSGWAY',
-            ],
-            'sso_destination' => [
-                'FriendlyName' => 'SSO Destination',
-                'Type' => 'text',
-                'Size' => '40',
-                'Default' => 'clientarea:home',
-                'Description' => 'مقصد پس از ورود (مثلاً clientarea:home / clientarea:services / sso:custom_redirect)',
-            ],
-            'sso_redirect_path' => [
-                'FriendlyName' => 'Custom Redirect Path',
-                'Type' => 'text',
-                'Size' => '60',
-                'Description' => 'فقط اگر destination برابر sso:custom_redirect است، مسیر نسبی مثل cart.php?a=checkout',
+                'Size' => '30',
+                'Default' => '',
+                'Description' => 'Optional template ID if MessageWay requires a template identifier.',
             ],
             'admin_username' => [
                 'FriendlyName' => 'Admin Username (localAPI)',
                 'Type' => 'text',
                 'Size' => '30',
-                'Description' => 'اختیاری؛ از WHMCS 7.2 به بعد لازم نیست، ولی توصیه می‌شود.',
+                'Description' => 'Optional admin username for localAPI calls (CreateSsoToken/AddClient).',
             ],
             'registration_enabled' => [
-                'FriendlyName' => 'فعال‌سازی ثبت‌نام با OTP',
+                'FriendlyName' => 'Enable registration via OTP',
                 'Type' => 'yesno',
-                'Description' => 'اجازه ثبت‌نام کاربران جدید بعد از تائید OTP',
+                'Description' => 'Allow creating new WHMCS clients after OTP verification.',
             ],
             'require_email_register' => [
-                'FriendlyName' => 'ایمیل اجباری در ثبت‌نام',
+                'FriendlyName' => 'Require email for registration',
                 'Type' => 'yesno',
-                'Description' => 'اگر فعال باشد، ورود اطلاعات ایمیل برای ثبت‌نام الزامی‌ست.',
+                'Description' => 'If enabled, registration form requires an email address.',
                 'Default' => 'on',
             ],
         ],
     ];
 }
 
-/** =====================[ activate/deactivate ]===================== */
+/**
+ * Activation / Deactivation
+ */
 function msgway_auth_activate()
 {
     try {
         if (!Capsule::schema()->hasTable('mod_msgway_auth_logs')) {
             Capsule::schema()->create('mod_msgway_auth_logs', function ($t) {
                 $t->increments('id');
-                $t->string('mobile', 32);
+                $t->string('mobile', 64);
                 $t->string('mode', 16); // login|register
-                $t->string('status', 16); // sent|verified|error
+                $t->string('status', 32); // sent|verified|error
                 $t->string('ip', 64)->nullable();
                 $t->text('meta')->nullable();
                 $t->timestamps();
@@ -115,262 +122,287 @@ function msgway_auth_deactivate()
     return ['status' => 'success', 'description' => 'MSGWAY OTP Auth deactivated'];
 }
 
-/** =====================[ helpers ]===================== */
+/**
+ * Helper: fetch module setting
+ */
 function msgway_auth_setting($name)
 {
     return Capsule::table('tbladdonmodules')
-        ->where('module','msgway_auth')->where('setting',$name)->value('value');
+        ->where('module', 'msgway_auth')
+        ->where('setting', $name)
+        ->value('value');
 }
 
-/** تطبیق شماره با کلاینت — تلاش برای match روی الگوهای رایج ایران */
-function msgway_auth_findClientByMobile(string $normalizedE164, string $countryCode = '+98')
+/**
+ * Normalize mobile to E.164 based on default country code (simple)
+ */
+function msgway_auth_normalize_mobile($raw, $countryCode = '+98')
 {
-    // کاندیدها: +98912..., 0912..., 912..., 98912...
+    $digitsFa = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+    $digitsEn = ['0','1','2','3','4','5','6','7','8','9'];
+    $m = str_replace($digitsFa, $digitsEn, trim($raw));
+    $m = preg_replace('/\D+/', '', $m);
+    if (strpos($m, '00') === 0) {
+        $m = substr($m, 2);
+    }
+    // remove leading zeros
+    $m = ltrim($m, '0');
+    $cc = ltrim($countryCode, '+');
+    if (strpos($m, $cc) !== 0) {
+        $m = $cc . $m;
+    }
+    return '+' . $m;
+}
+
+/**
+ * Find client by mobile or email
+ */
+function msgway_auth_findClientByMobile($normalizedE164, $countryCode = '+98')
+{
     $digits = preg_replace('/\D+/', '', $normalizedE164);
-    $cc = ltrim($countryCode, '+'); // 98
+    $cc = ltrim($countryCode, '+');
     if (strpos($digits, $cc) === 0) {
-        $local = substr($digits, strlen($cc)); // 912xxxxxxx
+        $local = substr($digits, strlen($cc));
     } else {
         $local = $digits;
     }
-    $local0 = (strlen($local) === 10 || strlen($local) === 11) ? ('0' . ltrim($local, '0')) : ('0' . $local);
+    $local0 = (strlen($local) >= 9) ? ('0' . ltrim($local, '0')) : ('0' . $local);
 
-    // جست‌وجو با LIKE (سازگار با فرمت‌های مختلف ذخیره)
     $c = Capsule::table('tblclients')
         ->where('phonenumber', 'like', '%' . $local . '%')
         ->orWhere('phonenumber', 'like', '%' . $local0 . '%')
         ->orWhere('phonenumber', 'like', '%' . $digits . '%')
-        ->orWhere('phonenumber', 'like', '%' . $normalizedE164 . '%')
         ->first();
 
     return $c ?: null;
 }
 
-function msgway_auth_findClientByEmail(string $email)
+function msgway_auth_findClientByEmail($email)
 {
     return Capsule::table('tblclients')->where('email', $email)->first();
 }
 
-function msgway_auth_localApi(string $command, array $params = [])
-{
-    $admin = msgway_auth_setting('admin_username') ?: null;
-    return localAPI($command, $params, $admin);
-}
-
-/** تولید پسورد رندوم برای AddClient */
-function msgway_auth_randomPassword(int $len = 16): string
+function msgway_auth_randomPassword($len = 16)
 {
     $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*()-_+=';
     $out = '';
-    for ($i=0; $i<$len; $i++) {
-        $out .= $chars[random_int(0, strlen($chars)-1)];
+    for ($i = 0; $i < $len; $i++) {
+        $out .= $chars[random_int(0, strlen($chars) - 1)];
     }
     return $out;
 }
 
-/** =====================[ ADMIN OUTPUT ]===================== */
+/**
+ * Admin area output
+ */
 function msgway_auth_output($vars)
 {
-    echo '<h2>MSGWAY OTP Auth — راه‌پیام</h2>';
-    echo '<p>کدنویسی: فاضل قائمی — نسخه 1.0.1</p>';
-    echo '<p>صفحه ورود/ثبت‌نام کاربر: <code>/index.php?m=msgway_auth</code></p>';
-    $ok = msgway_auth_load_sdk();
-    echo $ok ? '<div class="successbox"><strong>Composer autoload پیدا شد.</strong></div>'
-             : '<div class="errorbox"><strong>هشدار:</strong> فایل <code>vendor/autoload.php</code> یافت نشد. داخل پوشه افزونه <code>composer install</code> اجرا کنید.</div>';
+    echo '<h2>MSGWAY OTP Auth</h2>';
+    echo '<p>Coded by: Fazel Ghaemi — version 2.0.0</p>';
+    $ok = msgway_auth_setting('send_endpoint') ? true : false;
+    echo $ok ? '<div class="successbox">Settings appear configured. Configure API Key & Endpoints in the module settings.</div>'
+             : '<div class="errorbox">Module not fully configured. Set API key and endpoints.</div>';
 }
 
-/** =====================[ CLIENT AREA: OTP FLOW ]===================== */
+/**
+ * Client area (main flow)
+ */
 function msgway_auth_clientarea($vars)
 {
-    $apiKey       = msgway_auth_setting('api_key');
-    $countryCode  = msgway_auth_setting('country_code') ?: '+98';
-    $otpTplId     = (int)(msgway_auth_setting('otp_template_id') ?: 0);
-    $dest         = msgway_auth_setting('sso_destination') ?: 'clientarea:home';
-    $customPath   = msgway_auth_setting('sso_redirect_path') ?: '';
-    $registerOn   = (int)(msgway_auth_setting('registration_enabled') ?: 0);
-    $requireEmail = (int)(msgway_auth_setting('require_email_register') ? 1 : 0);
+    $apiKey = msgway_auth_setting('api_key');
+    $apiHeader = msgway_auth_setting('api_key_header') ?: 'x-api-key';
+    $bearer = msgway_auth_setting('bearer_auth') ? true : false;
+    $sendEndpoint = msgway_auth_setting('send_endpoint') ?: 'https://api.msgway.com/v1/sms/send';
+    $verifyEndpoint = msgway_auth_setting('verify_endpoint') ?: 'https://api.msgway.com/v1/sms/verify';
+    $countryCode = msgway_auth_setting('country_code') ?: '+98';
+    $otpTpl = msgway_auth_setting('otp_template_id') ?: '';
+    $registerOn = msgway_auth_setting('registration_enabled') ? true : false;
+    $requireEmail = msgway_auth_setting('require_email_register') ? true : false;
+    $adminUser = msgway_auth_setting('admin_username') ?: null;
 
     $errors = [];
-    $notices = [];
     $success = [];
     $stage = 'form';
-    $prefill = ['mode'=>'login','mobile'=>'','email'=>'','firstname'=>'','lastname'=>''];
+    $prefill = ['mode' => 'login', 'mobile' => '', 'firstname' => '', 'lastname' => '', 'email' => ''];
 
-    // session key
-    if (!isset($_SESSION)) session_start();
+    if (!isset($_SESSION)) {
+        session_start();
+    }
     $sessKey = 'msgway_auth_ctx';
 
-    $sdkReady = msgway_auth_load_sdk();
-    if (!$sdkReady) {
-        $errors[] = 'کتابخانه MSGWAY نصب نشده است. لطفاً داخل پوشه افزونه <code>composer install</code> اجرا کنید.';
-    }
+    // instantiate client
+    $httpClient = new MsgwayHttpClient([
+        'api_key' => $apiKey,
+        'api_header' => $apiHeader,
+        'bearer' => $bearer,
+        'send_endpoint' => $sendEndpoint,
+        'verify_endpoint' => $verifyEndpoint,
+        'template_id' => $otpTpl,
+    ]);
 
     // handle POST
-    if ($sdkReady && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
-        try {
-            $client = new \Msgway\MsgwayClient($apiKey, $countryCode);
-            if ($action === 'send_otp') {
-                $mode = ($_POST['mode'] ?? 'login') === 'register' ? 'register' : 'login';
-                $mobileRaw = trim((string)($_POST['mobile'] ?? ''));
-                $email = trim((string)($_POST['email'] ?? ''));
-                $firstname = trim((string)($_POST['firstname'] ?? ''));
-                $lastname  = trim((string)($_POST['lastname'] ?? ''));
+        if ($action === 'send_otp') {
+            $mode = ($_POST['mode'] ?? 'login') === 'register' ? 'register' : 'login';
+            $mobileRaw = trim((string)($_POST['mobile'] ?? ''));
+            $email = trim((string)($_POST['email'] ?? ''));
+            $firstname = trim((string)($_POST['firstname'] ?? ''));
+            $lastname = trim((string)($_POST['lastname'] ?? ''));
 
-                $prefill = compact('mode','mobileRaw','email','firstname','lastname');
-                $prefill['mobile'] = $mobileRaw;
+            $prefill = ['mode' => $mode, 'mobile' => $mobileRaw, 'firstname' => $firstname, 'lastname' => $lastname, 'email' => $email];
 
-                if ($mobileRaw === '' || $otpTplId <= 0) {
-                    $errors[] = 'شماره موبایل و Template ID الزامی‌ست.';
-                } else {
-                    $mobile = \Msgway\MsgwayClient::normalizeMobile($mobileRaw, $countryCode);
+            if ($mobileRaw === '') {
+                $errors[] = 'شماره موبایل را وارد کنید.';
+            } else {
+                $mobile = msgway_auth_normalize_mobile($mobileRaw, $countryCode);
 
-                    if ($mode === 'login') {
-                        $clientRow = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
-                        if (!$clientRow) {
-                            $errors[] = 'کاربری با این اطلاعات یافت نشد.';
-                        }
-                    } else { // register
-                        if (!$registerOn) {
-                            $errors[] = 'ثبت‌نام با OTP غیرفعال است.';
-                        }
-                        if ($requireEmail && $email === '') {
-                            $errors[] = 'ایمیل برای ثبت‌نام الزامی است.';
-                        }
-                        if ($email !== '') {
-                            $exists = msgway_auth_findClientByEmail($email);
-                            if ($exists) $errors[] = 'این ایمیل قبلاً ثبت شده است.';
-                        }
-                        if ($firstname === '' || $lastname === '') {
-                            $errors[] = 'نام و نام خانوادگی را وارد کنید.';
-                        }
+                if ($mode === 'login') {
+                    $clientRow = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
+                    if (!$clientRow) {
+                        $errors[] = 'کاربر یافت نشد. برای ورود باید حساب کاربری موجود باشد.';
                     }
+                } else { // register
+                    if (!$registerOn) {
+                        $errors[] = 'ثبت‌نام با OTP غیرفعال است.';
+                    }
+                    if ($requireEmail && $email === '') {
+                        $errors[] = 'ایمیل برای ثبت‌نام اجباری است.';
+                    }
+                    if ($email !== '' && msgway_auth_findClientByEmail($email)) {
+                        $errors[] = 'این ایمیل قبلاً ثبت شده است.';
+                    }
+                    if ($firstname === '' || $lastname === '') {
+                        $errors[] = 'نام و نام خانوادگی را وارد کنید.';
+                    }
+                }
 
-                    if (empty($errors)) {
-                        $resp = $client->sendTemplateSMS($mobile, $otpTplId);
+                if (empty($errors)) {
+                    # send via HTTP client
+                    $resp = $httpClient->sendOtp($mobile, $otpTpl, ['mode' => $mode]);
+                    # log
+                    Capsule::table('mod_msgway_auth_logs')->insert([
+                        'mobile' => $mobile,
+                        'mode' => $mode,
+                        'status' => isset($resp['success']) && $resp['success'] ? 'sent' : 'error',
+                        'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
+                        'meta' => json_encode($resp, JSON_UNESCAPED_UNICODE),
+                        'created_at' => date('Y-m-d H:i:s'),
+                        'updated_at' => date('Y-m-d H:i:s'),
+                    ]);
+
+            
+                    if (isset($resp['success']) && $resp['success']) {
                         $_SESSION[$sessKey] = [
                             'mode' => $mode,
                             'mobile' => $mobile,
                             'email' => $email,
                             'firstname' => $firstname,
                             'lastname' => $lastname,
-                            'ts' => time()
+                            'ts' => time(),
                         ];
-                        Capsule::table('mod_msgway_auth_logs')->insert([
-                            'mobile' => $mobile, 'mode' => $mode, 'status' => 'sent',
-                            'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
-                            'meta' => json_encode($resp, JSON_UNESCAPED_UNICODE),
-                            'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')
-                        ]);
                         $stage = 'sent';
                         $success[] = 'کد تایید ارسال شد.';
-                    }
-                }
-            } elseif ($action === 'verify_otp') {
-                $otp = trim((string)($_POST['otp'] ?? ''));
-                $ctx = $_SESSION[$sessKey] ?? null;
-                if (!$ctx || $otp === '') {
-                    $errors[] = 'اطلاعات جلسه معتبر نیست یا کد خالی است.';
-                } else {
-                    $mobile = $ctx['mobile'];
-                    $mode   = $ctx['mode'];
-                    $email  = $ctx['email'];
-                    $firstname = $ctx['firstname'];
-                    $lastname  = $ctx['lastname'];
-
-                    $verify = $client->verifyOtp($otp, $mobile);
-                    $status = '';
-                    if (is_array($verify)) {
-                        $status = strtolower((string)($verify['status'] ?? ''));
-                    }
-                    if ($status !== 'true' && $status !== 'ok' && $status !== 'verified' && $status !== 'success' && $status !== '1') {
-                        $errors[] = 'کد تایید معتبر نیست.';
                     } else {
-                        if ($mode === 'login') {
-                            $row = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
-                            if (!$row) {
-                                $errors[] = 'کاربر یافت نشد.';
-                            } else {
-                                $clientId = (int)$row->id;
-                                $token = msgway_auth_localApi('CreateSsoToken', array_filter([
-                                    'client_id' => $clientId,
-                                    'destination' => $dest ?: null,
-                                    'sso_redirect_path' => ($dest === 'sso:custom_redirect' && $customPath) ? $customPath : null,
-                                ]));
-                                if (($token['result'] ?? '') === 'success') {
-                                    Capsule::table('mod_msgway_auth_logs')->insert([
-                                        'mobile' => $mobile, 'mode' => 'login', 'status' => 'verified',
-                                        'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
-                                        'meta' => json_encode($verify, JSON_UNESCAPED_UNICODE),
-                                        'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')
-                                    ]);
-                                    header('Location: ' . $token['redirect_url']);
-                                    exit;
-                                } else {
-                                    $errors[] = 'عدم امکان ایجاد توکن ورود.';
-                                }
-                            }
-                        } else {
-                            if (!$registerOn) {
-                                $errors[] = 'ثبت‌نام غیرفعال است.';
-                            } else {
-                                $password = msgway_auth_randomPassword(20);
-                                $post = [
-                                    'firstname'   => $firstname ?: 'User',
-                                    'lastname'    => $lastname ?: 'OTP',
-                                    'email'       => $email ?: ('u'.time().'@example.invalid'),
-                                    'phonenumber' => $mobile,
-                                    'password2'   => $password,
-                                    'skipvalidation' => true,
-                                    'marketingoptin' => false,
-                                    'noemail'     => true,
-                                ];
-                                $add = msgway_auth_localApi('AddClient', $post);
-                                if (($add['result'] ?? '') === 'success') {
-                                    $clientId = (int)$add['clientid'];
-                                    $token = msgway_auth_localApi('CreateSsoToken', array_filter([
-                                        'client_id' => $clientId,
-                                        'destination' => $dest ?: null,
-                                        'sso_redirect_path' => ($dest === 'sso:custom_redirect' && $customPath) ? $customPath : null,
-                                    ]));
-                                    if (($token['result'] ?? '') === 'success') {
-                                        Capsule::table('mod_msgway_auth_logs')->insert([
-                                            'mobile' => $mobile, 'mode' => 'register', 'status' => 'verified',
-                                            'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
-                                            'meta' => json_encode(['verify'=>$verify,'add'=>$add], JSON_UNESCAPED_UNICODE),
-                                            'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')
-                                        ]);
-                                        header('Location: ' . $token['redirect_url']);
-                                        exit;
-                                    } else {
-                                        $errors[] = 'ساخت توکن ورود پس از ثبت‌نام ناموفق بود.';
-                                    }
-                                } else {
-                                    $errors[] = 'ساخت حساب کاربری ناموفق بود: '.htmlspecialchars((string)($add['message'] ?? ''));
-                                }
-                            }
-                        }
+                        $errors[] = 'ارسال کد ناموفق بود: ' . ($resp['message'] ?? 'unknown error');
                     }
                 }
             }
-        } catch (\Throwable $e) {
-            $errors[] = 'خطای داخلی: ' . htmlspecialchars($e->getMessage());
+        } elseif ($action === 'verify_otp') {
+            $otp = trim((string)($_POST['otp'] ?? ''));
+            $ctx = $_SESSION[$sessKey] ?? null;
+            if (!$ctx) {
+                $errors[] = 'جلسه‌ی ارسال کد منقضی شده یا وجود ندارد.';
+            } elseif ($otp === '') {
+                $errors[] = 'کد تایید را وارد کنید.';
+            } else {
+                $mobile = $ctx['mobile'];
+                $mode = $ctx['mode'];
+                $email = $ctx['email'] ?? '';
+                $firstname = $ctx['firstname'] ?? '';
+                $lastname = $ctx['lastname'] ?? '';
+
+                $verify = $httpClient->verifyOtp($mobile, $otp);
+                # log verify response
+                Capsule::table('mod_msgway_auth_logs')->insert([
+                    'mobile' => $mobile,
+                    'mode' => $mode,
+                    'status' => (isset($verify['success']) && $verify['success']) ? 'verified' : 'error',
+                    'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
+                    'meta' => json_encode($verify, JSON_UNESCAPED_UNICODE),
+                    'created_at' => date('Y-m-d H:i:s'),
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+
+                if (isset($verify['success']) && $verify['success']) {
+                    # login or register
+                    if ($mode === 'login') {
+                        $row = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
+                        if (!$row) {
+                            $errors[] = 'کاربر یافت نشد.';
+                        } else {
+                            $clientId = (int)$row->id;
+                            $token = localAPI('CreateSsoToken', array_filter([
+                                'client_id' => $clientId,
+                            ]), $adminUser ?: null);
+
+                            if (($token['result'] ?? '') === 'success' && isset($token['redirect_url'])) {
+                                header('Location: ' . $token['redirect_url']);
+                                exit;
+                            } else {
+                                $errors[] = 'ایجاد توکن ورود ناموفق بود.';
+                            }
+                        }
+                    } else { # register
+                        if (!$registerOn) {
+                            $errors[] = 'ثبت‌نام با OTP غیرفعال است.';
+                        } else {
+                            $password = msgway_auth_randomPassword(20);
+                            $post = [
+                                'firstname' => $firstname ?: 'User',
+                                'lastname' => $lastname ?: 'OTP',
+                                'email' => $email ?: ('u' . time() . '@example.invalid'),
+                                'phonenumber' => $mobile,
+                                'password2' => $password,
+                                'skipvalidation' => true,
+                                'noemail' => true,
+                            ];
+                            $add = localAPI('AddClient', $post, $adminUser ?: null);
+                            if (($add['result'] ?? '') === 'success') {
+                                $clientId = (int)$add['clientid'];
+                                $token = localAPI('CreateSsoToken', array_filter([
+                                    'client_id' => $clientId,
+                                ]), $adminUser ?: null);
+                                if (($token['result'] ?? '') === 'success' && isset($token['redirect_url'])) {
+                                    header('Location: ' . $token['redirect_url']);
+                                    exit;
+                                } else {
+                                    $errors[] = 'ورود بعد از ثبت‌نام ناموفق بود.';
+                                }
+                            } else {
+                                $errors[] = 'ساخت حساب کاربری موفق نبود: ' . htmlspecialchars((string)($add['message'] ?? ''));
+                            }
+                        }
+                    }
+                } else {
+                    $errors[] = 'کد تایید نامعتبر است.';
+                }
+            }
         }
     }
 
     return [
-        'pagetitle'    => 'ورود/عضویت با پیامک — راه‌پیام',
-        'breadcrumb'   => ['index.php?m=msgway_auth' => 'ورود/عضویت با پیامک'],
+        'pagetitle' => 'ورود/عضویت با پیامک — راه‌پیام',
+        'breadcrumb' => ['index.php?m=msgway_auth' => 'ورود با پیامک'],
         'templatefile' => 'otp',
         'requirelogin' => false,
         'vars' => [
-            'errors'   => $errors,
-            'notices'  => $notices,
-            'success'  => $success,
-            'stage'    => $stage ?: (isset($_SESSION[$sessKey]) ? 'sent' : 'form'),
-            'prefill'  => $prefill,
+            'errors' => $errors,
+            'success' => $success,
+            'stage' => $stage,
+            'prefill' => $prefill,
             'modulelink' => $vars['modulelink'],
-            'brand'    => 'MSGWAY | راه‌پیام — Coded by Fazel Ghaemi (v1.0.1)',
+            'brand' => 'MSGWAY | راه‌پیام — Coded by Fazel Ghaemi',
         ],
     ];
 }
