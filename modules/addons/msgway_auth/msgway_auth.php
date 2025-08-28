@@ -2,15 +2,29 @@
 /**
  * MSGWAY (راه‌پیام) — OTP Login & Register for WHMCS
  * کدنویسی: فاضل قائمی | Fazel Ghaemi
- * نسخه: 1.0.0
+ * نسخه: 1.0.1
  */
 
 if (!defined('WHMCS')) { die('This file cannot be accessed directly'); }
 
 use WHMCS\Database\Capsule;
 
-require_once __DIR__ . '/vendor/autoload.php';
-use Msgway\MsgwayClient;
+/**
+ * Lazy-load Composer autoload if present. Avoid fatal if vendor/ is missing.
+ */
+function msgway_auth_load_sdk(): bool
+{
+    static $loaded = null;
+    if ($loaded !== null) return $loaded;
+    $autoload = __DIR__ . '/vendor/autoload.php';
+    if (file_exists($autoload)) {
+        require_once $autoload;
+        $loaded = true;
+    } else {
+        $loaded = false;
+    }
+    return $loaded;
+}
 
 /** =====================[ config ]===================== */
 function msgway_auth_config()
@@ -19,7 +33,7 @@ function msgway_auth_config()
         'name'        => 'MSGWAY OTP Auth (راه‌پیام) — by Fazel Ghaemi',
         'description' => 'ورود/عضویت کاربران WHMCS با OTP راه‌پیام و SSO امن',
         'author'      => 'Fazel Ghaemi',
-        'version'     => '1.0.0',
+        'version'     => '1.0.1',
         'fields'      => [
             'api_key' => [
                 'FriendlyName' => 'MSGWAY API Key',
@@ -154,12 +168,15 @@ function msgway_auth_randomPassword(int $len = 16): string
     return $out;
 }
 
-/** =====================[ ADMIN OUTPUT - optional minimal ]===================== */
+/** =====================[ ADMIN OUTPUT ]===================== */
 function msgway_auth_output($vars)
 {
     echo '<h2>MSGWAY OTP Auth — راه‌پیام</h2>';
-    echo '<p>کدنویسی: فاضل قائمی — نسخه 1.0.0</p>';
+    echo '<p>کدنویسی: فاضل قائمی — نسخه 1.0.1</p>';
     echo '<p>صفحه ورود/ثبت‌نام کاربر: <code>/index.php?m=msgway_auth</code></p>';
+    $ok = msgway_auth_load_sdk();
+    echo $ok ? '<div class="successbox"><strong>Composer autoload پیدا شد.</strong></div>'
+             : '<div class="errorbox"><strong>هشدار:</strong> فایل <code>vendor/autoload.php</code> یافت نشد. داخل پوشه افزونه <code>composer install</code> اجرا کنید.</div>';
 }
 
 /** =====================[ CLIENT AREA: OTP FLOW ]===================== */
@@ -183,11 +200,16 @@ function msgway_auth_clientarea($vars)
     if (!isset($_SESSION)) session_start();
     $sessKey = 'msgway_auth_ctx';
 
+    $sdkReady = msgway_auth_load_sdk();
+    if (!$sdkReady) {
+        $errors[] = 'کتابخانه MSGWAY نصب نشده است. لطفاً داخل پوشه افزونه <code>composer install</code> اجرا کنید.';
+    }
+
     // handle POST
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($sdkReady && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         try {
-            $client = new MsgwayClient($apiKey, $countryCode);
+            $client = new \Msgway\MsgwayClient($apiKey, $countryCode);
             if ($action === 'send_otp') {
                 $mode = ($_POST['mode'] ?? 'login') === 'register' ? 'register' : 'login';
                 $mobileRaw = trim((string)($_POST['mobile'] ?? ''));
@@ -201,10 +223,9 @@ function msgway_auth_clientarea($vars)
                 if ($mobileRaw === '' || $otpTplId <= 0) {
                     $errors[] = 'شماره موبایل و Template ID الزامی‌ست.';
                 } else {
-                    $mobile = MsgwayClient::normalizeMobile($mobileRaw, $countryCode);
+                    $mobile = \Msgway\MsgwayClient::normalizeMobile($mobileRaw, $countryCode);
 
                     if ($mode === 'login') {
-                        // باید کلاینت موجود باشد
                         $clientRow = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
                         if (!$clientRow) {
                             $errors[] = 'کاربری با این اطلاعات یافت نشد.';
@@ -260,13 +281,11 @@ function msgway_auth_clientarea($vars)
                     $verify = $client->verifyOtp($otp, $mobile);
                     $status = '';
                     if (is_array($verify)) {
-                        // طبق README خروجی ['status'] دارد
                         $status = strtolower((string)($verify['status'] ?? ''));
                     }
                     if ($status !== 'true' && $status !== 'ok' && $status !== 'verified' && $status !== 'success' && $status !== '1') {
                         $errors[] = 'کد تایید معتبر نیست.';
                     } else {
-                        // login or register
                         if ($mode === 'login') {
                             $row = $email ? msgway_auth_findClientByEmail($email) : msgway_auth_findClientByMobile($mobile, $countryCode);
                             if (!$row) {
@@ -295,7 +314,6 @@ function msgway_auth_clientarea($vars)
                             if (!$registerOn) {
                                 $errors[] = 'ثبت‌نام غیرفعال است.';
                             } else {
-                                // ساخت کلاینت با حداقل فیلدها + skipvalidation
                                 $password = msgway_auth_randomPassword(20);
                                 $post = [
                                     'firstname'   => $firstname ?: 'User',
@@ -340,7 +358,6 @@ function msgway_auth_clientarea($vars)
         }
     }
 
-    // آماده‌سازی خروجی
     return [
         'pagetitle'    => 'ورود/عضویت با پیامک — راه‌پیام',
         'breadcrumb'   => ['index.php?m=msgway_auth' => 'ورود/عضویت با پیامک'],
@@ -353,7 +370,7 @@ function msgway_auth_clientarea($vars)
             'stage'    => $stage ?: (isset($_SESSION[$sessKey]) ? 'sent' : 'form'),
             'prefill'  => $prefill,
             'modulelink' => $vars['modulelink'],
-            'brand'    => 'MSGWAY | راه‌پیام — Coded by Fazel Ghaemi',
+            'brand'    => 'MSGWAY | راه‌پیام — Coded by Fazel Ghaemi (v1.0.1)',
         ],
     ];
 }

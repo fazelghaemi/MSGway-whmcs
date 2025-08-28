@@ -6,6 +6,7 @@
   .mw-row{display:flex;gap:.75rem}
   .mw-row > div{flex:1}
   .rtl{direction:rtl;text-align:right}
+  code{background:#f6f8fa;padding:.1rem .3rem;border-radius:6px}
 </style>
 
 <div class="mw-card rtl">
@@ -14,7 +15,7 @@
 
   {if $errors && count($errors)}
     <article class="contrast">
-      {foreach from=$errors item=e}<p style="color:#c00;">{$e}</p>{/foreach}
+      {foreach from=$errors item=e}<p style="color:#c00;">{$e nofilter}</p>{/foreach}
     </article>
   {/if}
   {if $success && count($success)}
