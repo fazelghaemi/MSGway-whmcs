@@ -1,6 +1,6 @@
 {
-  "name": "readystudio/msgway-whmcs-addon",
-  "description": "WHMCS Addon for MSGWAY (راه‌پیام) — coded by Fazel Ghaemi",
+  "name": "readystudio/msgway-auth-whmcs-addon",
+  "description": "WHMCS OTP Login/Registration via MSGWAY — coded by Fazel Ghaemi",
   "type": "library",
   "license": "MIT",
   "require": {

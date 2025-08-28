@@ -1,6 +1,6 @@
 <?php
 /**
- * MSGWAY WHMCS Addon
+ * MSGWAY OTP Auth Addon — WHMCS
  * Coded by: Fazel Ghaemi (فاضل قائمی)
  * License: MIT
  */
@@ -45,10 +45,12 @@ class MsgwayClient
         return new MessageWayAPI($this->apiKey);
     }
 
+    /** ارسال OTP قالبی (Template OTP) */
     public function sendTemplateSMS(string $mobile, int $templateId, array $params = []): array
     {
         $mw = $this->getClient();
         try {
+            // سازگاری با نسخه‌های SDK که پارامتر سوم را می‌پذیرند
             $rm = new ReflectionMethod($mw, 'sendViaSMS');
             if ($rm->getNumberOfParameters() >= 3) {
                 return $mw->sendViaSMS($mobile, $templateId, ['params' => array_values($params)]);
@@ -57,6 +59,7 @@ class MsgwayClient
         return $mw->sendViaSMS($mobile, $templateId);
     }
 
+    /** تأیید OTP */
     public function verifyOtp(string $otp, string $mobile): array
     {
         return $this->getClient()->verifyOTP($otp, $mobile);
@@ -65,11 +68,6 @@ class MsgwayClient
     public function getTemplate(int $templateId): array
     {
         return $this->getClient()->getTemplate($templateId);
-    }
-
-    public function getStatus(string $referenceId): array
-    {
-        return $this->getClient()->getStatus($referenceId);
     }
 
     public function getBalance()

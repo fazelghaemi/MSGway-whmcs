@@ -1,1 +1,0 @@
-# MSGway-whmcs
